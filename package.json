@@ -1,0 +1,16 @@
+{
+  "name": "opencode-trae-bridge",
+  "version": "0.1.0",
+  "description": "将企业版 Trae CLI 封装为本地 OpenAI 兼容服务，并作为自定义 provider 接入 opencode",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "install-bridge": "node scripts/install.mjs",
+    "uninstall-bridge": "node scripts/uninstall.mjs",
+    "status": "node scripts/status.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
