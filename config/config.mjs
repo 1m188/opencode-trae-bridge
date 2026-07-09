@@ -18,7 +18,10 @@ export const host = "127.0.0.1";
 export const traecliPath = "";
 
 // 权限模式信号不明确时的默认值："plan"（只读）或 "bypass_permissions"（可改文件）。
-export const defaultPermissionMode = "plan";
+// 默认为 bypass_permissions：opencode 的 build 模式（默认态）不注入任何标记，
+// 只有 plan 模式才注入 "Plan mode is active" 提示。若默认设为 plan，则所有 build
+// 请求都会被静默降级为只读、无法编辑文件。故默认放行，仅在检测到 plan 信号时只读。
+export const defaultPermissionMode = "bypass_permissions";
 
 // prompt 作为命令行参数的字符上限。
 export const maxPromptChars = 30000;
@@ -65,12 +68,20 @@ function runTraeModels() {
 
 // 解析 `traecli models` 的输出为模型列表：按行 trim、过滤空行得到 ID，
 // 每个 ID 映射为 { id, name: "<id> (Trae)" }。列表为空则抛错。
+//
+// 稳健性：正常情况下模型列表在 stdout、登录/INFO 日志在 stderr（本函数只读 stdout）。
+// 但为防某些 traecli 版本把日志混入 stdout，仅保留"看起来像模型 ID"的行——
+// 模型 ID 由字母、数字与 . _ / + - 组成且不含空格（实测如 DeepSeek-V4-Pro、
+// ZV/Qwen3.6-27B）；而日志行含时间戳、空格与冒号，会被此规则排除。
+const MODEL_ID_RE = /^[A-Za-z0-9._/+-]+$/;
+
 export async function resolveModels() {
   const stdout = await runTraeModels();
   const ids = stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((line) => MODEL_ID_RE.test(line));
 
   if (!ids.length) {
     throw new Error(

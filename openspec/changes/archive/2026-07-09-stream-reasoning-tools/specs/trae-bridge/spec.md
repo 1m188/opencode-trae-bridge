@@ -2,17 +2,17 @@
 
 ### Requirement: 流式响应
 
-当请求设置 `"stream": true` 时，转接层 SHALL 支持使用 Server-Sent Events 的流式响应，将 Trae CLI 的 `stream-json` 输出翻译为 OpenAI 流式分片。转接层 SHALL 将 Agent 的思考过程、中间叙述与内部工具调用统一翻译为可见的思考内容（`reasoning_content`），并仅将 traecli 的最终 `result` 作为正文（`content`）在收尾时一次性输出，从而保证「过程 → 最终答案」的时序正确、正文干净。转接层 SHALL NOT 将 traecli 的内部工具调用作为 OpenAI `tool_calls` 转发给调用方。
+当请求设置 `"stream": true` 时，转接层 SHALL 支持使用 Server-Sent Events 的流式响应，将 Trae CLI 的 `stream-json` 输出翻译为 OpenAI 流式分片。转接层 SHALL 将 Agent 的思考过程与内部工具调用翻译为可见的思考内容（`reasoning_content`），SHALL 抑制流式期间的中间叙述（不作为正文输出），并仅将 traecli 的最终 `result` 作为正文（`content`）在收尾时一次性输出，从而保证「过程 → 最终答案」的时序正确、正文干净。转接层 SHALL NOT 将 traecli 的内部工具调用作为 OpenAI `tool_calls` 转发给调用方。
 
 #### Scenario: 思考内容分片
 
 - **WHEN** traecli 输出带有 `delta.reasoning_content` 的 `stream_event` 行
 - **THEN** 转接层将该思考增量转发为 `chat.completion.chunk`，其 `choices[0].delta.reasoning_content` 为该增量，使 opencode 渲染为思考块
 
-#### Scenario: 中间叙述归入思考块
+#### Scenario: 抑制中间叙述
 
 - **WHEN** traecli 在完成最终答案前输出带 `delta.content` 的 `stream_event` 行（如「让我先列出文件…」等中间叙述）
-- **THEN** 转接层在流式期间不将其作为正文（`delta.content`）输出，避免中间叙述与最终答案交错污染正文；最终答案由收尾时的 `result` 统一输出
+- **THEN** 转接层在流式期间不将其作为正文（`delta.content`）输出，也不进思考块；因为中间叙述与最终答案共用同一条 `content` 流、无可靠分界，若输出会与收尾的 `result`（最终答案）重复。最终答案统一由收尾的 `result` 输出。转接层仅累积 `delta.content` 作为「traecli 未产生 result 事件」时的兜底
 
 #### Scenario: 工具调用可见
 

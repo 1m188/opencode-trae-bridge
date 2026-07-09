@@ -20,6 +20,8 @@ export const OPENCODE_DIR = path.join(os.homedir(), ".config", "opencode");
 // ===== traecli 可执行文件定位（与 src/server.js 的探测逻辑对齐）=====
 
 // 生成跨平台的 traecli 候选安装路径（不含 PATH 命令名）。
+// 注意：此逻辑在 src/server.js 有一份等价实现（CommonJS）。因两处分属 ESM 与
+// CommonJS、无法共享模块，故各自维护；修改候选路径时务必两处同步更新。
 function traecliCandidates() {
   const home = os.homedir();
   const isWin = process.platform === "win32";

@@ -1,3 +1,7 @@
+## Purpose
+
+定义 Trae Bridge 的可分发项目结构与安装器规范：以可执行的 `config/config.mjs` 为单一配置源，提供幂等、带备份、可回滚的安装/卸载/状态脚本，将转接层、生命周期插件与派生的 opencode provider 配置安全部署到用户配置目录。
+
 ## Requirements
 
 ### Requirement: 可分发的项目结构

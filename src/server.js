@@ -21,7 +21,9 @@ function loadConfig() {
     port: 8790,
     host: "127.0.0.1",
     traecliPath: "",
-    defaultPermissionMode: "plan",
+    // 默认放行编辑：opencode build 模式（默认态）不注入任何标记，仅 plan 模式
+    // 注入 "Plan mode is active"。若默认设为 plan，build 请求会被静默降级为只读。
+    defaultPermissionMode: "bypass_permissions",
     maxPromptChars: 30000,
     models: [
       { id: "DeepSeek-V4-Pro", name: "DeepSeek V4 Pro (Trae)" },
@@ -79,6 +81,7 @@ const TRAECLI_PATH = CONFIG.traecliPath;
 const MODELS = CONFIG.models;
 
 // 权限模式信号不明确时的默认值（"plan" 只读 / "bypass_permissions" 可改文件）。
+// 默认为可写：opencode build 模式无标记，仅 plan 模式注入 "Plan mode is active"。
 const DEFAULT_PERMISSION_MODE = CONFIG.defaultPermissionMode;
 
 // prompt 作为命令行参数传入，受操作系统命令行长度限制（Windows 约 32K）。
@@ -97,9 +100,31 @@ const MAX_BODY_BYTES = 10 * 1024 * 1024;
 // 避免污染 opencode TUI 终端。
 const LOG_PATH = path.join(__dirname, "trae-bridge.log");
 
+// 日志轮转阈值（字节）：超过则将当前日志转存为 .1（覆盖旧的 .1），仅保留一份历史，
+// 避免长期运行导致日志无限增长。
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+// 若当前日志超过阈值，转存为 .1（覆盖旧备份）。失败时静默忽略。
+function rotateLogIfNeeded() {
+  try {
+    const st = fs.statSync(LOG_PATH);
+    if (st.size < LOG_MAX_BYTES) return;
+    const rotated = LOG_PATH + ".1";
+    try {
+      fs.rmSync(rotated, { force: true });
+    } catch (_) {
+      // 忽略：旧备份可能不存在。
+    }
+    fs.renameSync(LOG_PATH, rotated);
+  } catch (_) {
+    // 忽略：日志文件可能尚不存在或不可访问。
+  }
+}
+
 // 追加一行日志到文件（失败时静默忽略）。
 function logLine(msg) {
   try {
+    rotateLogIfNeeded();
     fs.appendFileSync(LOG_PATH, `[${new Date().toISOString()}] ${msg}\n`);
   } catch (_) {
     // 忽略：日志写入失败不应影响服务。
@@ -109,6 +134,8 @@ function logLine(msg) {
 // ===== 辅助函数 =====
 
 // 生成跨平台的 traecli 候选安装路径（不含 PATH 命令名）。
+// 注意：此逻辑在 scripts/lib/config.mjs 有一份等价实现（ESM）。因两处分属
+// CommonJS 与 ESM、无法共享模块，故各自维护；修改候选路径时务必两处同步更新。
 function traecliCandidates() {
   const home = os.homedir();
   const isWin = process.platform === "win32";
@@ -191,25 +218,23 @@ function buildPrompt(messages) {
   return prompt;
 }
 
-// 根据请求内容推导权限模式：识别到 plan 信号则 plan，识别到 build 信号则放开，
-// 否则回退到默认值。
+// 根据请求内容推导权限模式。
+//
+// opencode 的 plan 模式通过 <system-reminder> 注入一段固定文本，恒以
+// "Plan mode is active. The user indicated that they do not want you to execute
+// yet ..." 开头（已由反编译 opencode 二进制证实）。build 模式是 opencode 的默认
+// 态，不注入任何标记。因此判定规则为：
+//   - 命中该 plan 信号 → "plan"（只读）
+//   - 否则 → DEFAULT_PERMISSION_MODE（默认为 "bypass_permissions"，即可写）
+// 只做精确短语匹配，避免旧版宽松子串（如 "read-only"、"plan mode"）在正常对话
+// 中误判、把 build 请求静默降级为只读。
 function derivePermissionMode(messages) {
   const haystack = (Array.isArray(messages) ? messages : [])
     .map((m) => contentToText(m && m.content))
     .join("\n")
     .toLowerCase();
 
-  const planSignal =
-    haystack.includes("plan mode") ||
-    haystack.includes("planning mode") ||
-    haystack.includes("read-only") ||
-    haystack.includes("do not make any edits") ||
-    haystack.includes("present a plan");
-  const buildSignal =
-    haystack.includes("build mode") || haystack.includes("bypass_permissions");
-
-  if (planSignal) return "plan";
-  if (buildSignal) return "bypass_permissions";
+  if (haystack.includes("plan mode is active")) return "plan";
   return DEFAULT_PERMISSION_MODE;
 }
 
@@ -310,8 +335,12 @@ function formatToolCall(tool) {
 }
 
 // 逐行解析 traecli 的 NDJSON 输出。
-// 回调：onDelta(正文增量)、onReasoning(思考增量)、onToolCall(工具调用行)、onResult(最终文本)、onError(错误)、onClose(关闭)。
-function parseStream(child, onDelta, onReasoning, onToolCall, onResult, onError, onClose) {
+// 回调：onReasoning(思考增量)、onToolCall(工具调用行)、onResult(最终文本)、onError(错误)、onClose(关闭)。
+// 说明：流式期间 traecli 的中间叙述与最终答案共用同一条 delta.content 流，二者
+// 无可靠分界标志。为保证「过程→最终答案」时序且正文干净，中间叙述一律不输出为
+// 正文；最终答案统一由末尾的 result 事件一次性给出（见 onResult）。delta.content
+// 仅用于累积 finalText 作为"缺少 result 事件"时的兜底。
+function parseStream(child, onReasoning, onToolCall, onResult, onError, onClose) {
   let buffer = "";
   let finalText = "";
 
@@ -336,11 +365,9 @@ function parseStream(child, onDelta, onReasoning, onToolCall, onResult, onError,
             onReasoning(delta.reasoning_content);
           }
           if (delta.content) {
-            // 累积正文作为最终答案的兜底（当缺少 result 事件时使用）。
-            // 流式期间不逐字输出：中间叙述与最终答案交错在同一 content 流里，
-            // 为保证「过程→最终答案」的时序，正文改由末尾的 result 一次性输出。
+            // 仅累积作为兜底：正常情况下末尾的 result 事件会覆盖 finalText；
+            // 仅当 traecli 未输出 result 时，才用累积的 content 作为最终答案。
             finalText += delta.content;
-            onDelta(delta.content);
           }
           // delta.tool_calls 是分片式的内部工具调用（非完整），按决策 3 不予转发。
         }
@@ -421,7 +448,18 @@ function handleChat(req, res) {
       return;
     }
 
-    const model = payload.model || MODELS[0];
+    const requestedModel = payload.model;
+    // 白名单校验：仅接受已配置的模型；未指定时用首个，未知则回退首个并记录，
+    // 避免把任意字符串原样拼进 traecli 的 -c model.name=<...> 参数。
+    let model;
+    if (typeof requestedModel === "string" && MODELS.includes(requestedModel)) {
+      model = requestedModel;
+    } else {
+      if (requestedModel != null) {
+        logLine(`未知模型 "${requestedModel}"，回退到默认模型 "${MODELS[0]}"`);
+      }
+      model = MODELS[0];
+    }
     const messages = payload.messages || [];
     const stream = payload.stream !== false; // 默认流式
     const prompt = buildPrompt(messages);
@@ -505,9 +543,6 @@ function handleStreaming(res, model, mode, prompt) {
 
   parseStream(
     child,
-    // 正文增量：流式期间不输出，避免中间叙述与最终答案交错污染正文；
-    // 统一在收尾时以 result 一次性输出。
-    () => {},
     (reasoningPiece) => send(chunkObject(id, created, model, { reasoning_content: reasoningPiece }, null)),
     (toolLine) => send(chunkObject(id, created, model, { reasoning_content: toolLine }, null)),
     (finalAnswer) => finish(finalAnswer),
@@ -578,7 +613,6 @@ function handleNonStreaming(res, model, mode, prompt) {
 
   parseStream(
     child,
-    () => {},
     () => {},
     () => {},
     (text) => settle(text, false),

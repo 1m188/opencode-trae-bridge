@@ -3,7 +3,7 @@
 将企业版 **Trae CLI** 封装为本地 OpenAI 兼容的 HTTP 服务，并作为自定义 provider 接入 [opencode](https://opencode.ai)，让 Trae 模型在 opencode TUI 中像原生模型一样使用。
 
 - 零第三方依赖，仅使用 Node 内置模块。
-- 流式响应中 Agent 的思考过程、中间叙述与内部工具调用实时进入 opencode 思考块，最终答案作为正文一次性输出，时序清晰、正文干净。
+- 流式响应中 Agent 的思考过程与内部工具调用实时进入 opencode 思考块，最终答案作为正文一次性输出，时序清晰、正文干净（中间叙述与最终答案共用同一条流、无法可靠区分，故一并抑制以避免重复）。
 - 单一配置源 `config/config.mjs`（可执行）同时驱动转接层与 opencode provider；模型列表在安装时实时从 `traecli models` 获取。
 - 提供幂等、带备份、可回滚的安装/卸载/状态脚本。
 
@@ -72,7 +72,7 @@ node scripts/status.mjs
 | `port` | 整数 | 转接层监听端口（默认 `8790`） |
 | `host` | 字符串 | 监听地址（默认 `127.0.0.1`，仅回环） |
 | `traecliPath` | 字符串 | traecli 可执行文件的显式路径。**通常留空**（`""`）即可，会自动探测；仅在非标准安装位置时才需填写 |
-| `defaultPermissionMode` | 字符串 | 权限信号不明确时的默认值：`plan`（只读）或 `bypass_permissions`（可改文件） |
+| `defaultPermissionMode` | 字符串 | 无 plan 信号时的默认值：`bypass_permissions`（可改文件，默认）或 `plan`（只读）。opencode 的 build 模式不注入任何标记，故默认放行；仅当检测到 plan 信号时才只读 |
 | `maxPromptChars` | 整数 | prompt 作为命令行参数的字符上限（默认 `30000`） |
 | `resolveModels()` | 函数 | 安装时执行 `traecli models`，实时返回模型列表 `[{ id, name }]`；`id` 传给 traecli，`name` 为 opencode 中的显示名（`"<id> (Trae)"`） |
 
@@ -96,5 +96,5 @@ node scripts/status.mjs
 - **JSONC 注释会丢失**：opencode 配置若为 `.jsonc` 且含注释，安装/卸载写回时会转成标准 JSON，注释与尾逗号将丢失。每次改动前都会生成带时间戳的备份（`opencode.jsonc.bak-<时间戳>`），可据此手工恢复注释。
 - **prompt 长度受限**：prompt 通过命令行参数传入，超过 `maxPromptChars` 会截断（保留最近轮次），属有损。
 - **无状态**：每次请求新起一个 traecli 进程，多轮对话靠把历史拼进 prompt，非真正会话复用。
-- **权限模式靠关键词推导**：转接层通过文本匹配 plan/build 信号判断只读或可改文件，措辞变化可能误判。
+- **权限模式靠信号推导**：转接层精确匹配 opencode plan 模式注入的 `Plan mode is active` 提示来判定只读；无此信号即视为 build（可改文件）。若未来 opencode 更改该提示措辞，需同步更新匹配逻辑。
 - **孤儿进程**：正常情况下，客户端断开、请求异常或完成时都会终止 traecli 子进程，单次调用还有超时保护（默认 10 分钟，可用 `TRAE_BRIDGE_TIMEOUT_MS` 覆盖）。仅当 opencode 异常崩溃时，转接层进程才可能残留占用端口——下次启动会探活确认占用者是否为自身实例，是则复用退出，否则报错退出。
