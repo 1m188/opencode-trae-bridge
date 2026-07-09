@@ -87,7 +87,7 @@ async function main() {
   // 5.4 探活 /v1/models
   log("");
   log("转接层探活：");
-  // 读取实际部署的 config.json（转接层真正监听的 host/port），而非源仓库 trae.json，
+  // 读取实际部署的 config.json（转接层真正监听的 host/port），而非源仓库 config.mjs，
   // 避免用户改了源配置但未重装时探错端口。
   let host = "127.0.0.1";
   let port = 8790;

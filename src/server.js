@@ -11,11 +11,11 @@ const os = require("os");
 
 // ===== 配置加载 =====
 
-// 安装目录下的 config.json（由 config/trae.json 在安装时派生）。
+// 安装目录下的 config.json（由 config/config.mjs 在安装时派生）。
 // 若不存在或字段缺省，则回退到环境变量与内置默认值。
 function loadConfig() {
   // 兜底默认值：仅在同目录 config.json 完全缺失时使用（正常安装会生成该文件）。
-  // 这里的 models 只是"零配置直接运行"时的最小占位，与 config/trae.json 的完整
+  // 这里的 models 只是"零配置直接运行"时的最小占位，与 config/config.mjs 的完整
   // 列表无关；实际分发的模型清单以安装生成的 config.json 为准。
   const defaults = {
     port: 8790,

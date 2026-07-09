@@ -2,8 +2,8 @@
 // 用法：node scripts/install.mjs
 
 import fs from "fs";
+import { resolveConfig } from "../config/config.mjs";
 import {
-  readTraeConfig,
   locateOpencodeConfig,
   readOpencodeConfig,
   deriveProvider,
@@ -21,15 +21,26 @@ function log(msg) {
   process.stdout.write(msg + "\n");
 }
 
-function main() {
+async function main() {
   // 参数校验：本脚本不接受任何参数（--set-default 已移除）。
   const unknown = process.argv.slice(2);
   if (unknown.length) {
     log(`[!] 忽略未知参数：${unknown.join(" ")}（install.mjs 不接受任何参数）`);
   }
 
-  // 读取并校验单一配置源。
-  const traeCfg = readTraeConfig();
+  // 解析配置源：常量 + 实时执行 `traecli models` 获取模型列表。
+  // 失败（未登录 / 找不到 traecli / 输出为空）时抛错，由外层捕获并中止安装，
+  // 中止前不写入任何配置或部署文件。
+  let traeCfg;
+  try {
+    traeCfg = await resolveConfig();
+  } catch (err) {
+    log(`[错误] 解析配置失败，已中止安装（未写入任何文件）：`);
+    log(`       ${err.message}`);
+    process.exit(1);
+  }
+  log(`[✓] 已从 traecli 实时获取 ${traeCfg.models.length} 个模型`);
+
   const src = sourcePaths();
   const tgt = targetPaths();
 
@@ -46,7 +57,7 @@ function main() {
   fs.copyFileSync(src.serverFile, tgt.serverFile);
   log(`[✓] 部署转接层：${tgt.serverFile}`);
 
-  // 4.2 生成 ~/.config/opencode/trae-bridge/config.json（由 trae.json 派生）
+  // 4.2 生成 ~/.config/opencode/trae-bridge/config.json（由 config.mjs 派生）
   writeJson(tgt.bridgeConfigFile, deriveBridgeConfig(traeCfg));
   log(`[✓] 生成转接层配置：${tgt.bridgeConfigFile}`);
 
@@ -118,9 +129,7 @@ function main() {
   log("  提示：如需检查状态可运行 node scripts/status.mjs");
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   process.stderr.write(`[安装失败] ${err.message}\n`);
   process.exit(1);
-}
+});

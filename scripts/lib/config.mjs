@@ -1,6 +1,7 @@
 // Trae Bridge 安装器公共库（零第三方依赖，仅用 Node 内置模块）。
-// 负责：读取 config/trae.json、定位 opencode 用户配置、JSONC 解析、
+// 负责：定位 traecli 可执行文件、定位 opencode 用户配置、JSONC 解析、
 // 派生 provider 与转接层配置、备份、深合并、路径解析。
+// 配置源为可执行的 config/config.mjs（不再读取静态 config/trae.json）。
 
 import fs from "fs";
 import path from "path";
@@ -16,56 +17,49 @@ export const REPO_ROOT = path.resolve(__dirname, "..", "..");
 // opencode 用户配置目录。
 export const OPENCODE_DIR = path.join(os.homedir(), ".config", "opencode");
 
-// ===== 3.1 读取并校验 config/trae.json =====
+// ===== traecli 可执行文件定位（与 src/server.js 的探测逻辑对齐）=====
 
-export function readTraeConfig() {
-  const p = path.join(REPO_ROOT, "config", "trae.json");
-  let cfg;
-  try {
-    cfg = JSON.parse(fs.readFileSync(p, "utf8"));
-  } catch (err) {
-    throw new Error(`无法读取或解析 ${p}：${err.message}`);
-  }
+// 生成跨平台的 traecli 候选安装路径（不含 PATH 命令名）。
+function traecliCandidates() {
+  const home = os.homedir();
+  const isWin = process.platform === "win32";
+  const exe = isWin ? "traecli.exe" : "traecli";
+  const bases = [];
 
-  const errors = [];
-  if (!cfg || typeof cfg !== "object") errors.push("根节点必须是对象");
-  if (cfg && !Number.isInteger(cfg.port)) {
-    errors.push("port 必须为整数");
-  } else if (cfg && (cfg.port < 1 || cfg.port > 65535)) {
-    errors.push("port 必须在 1..65535 范围内");
-  }
-  if (cfg && typeof cfg.host !== "string") errors.push("host 必须为字符串");
-  if (
-    cfg &&
-    cfg.maxPromptChars !== undefined &&
-    (!Number.isInteger(cfg.maxPromptChars) || cfg.maxPromptChars < 1000)
-  ) {
-    errors.push("maxPromptChars 若提供必须为 >=1000 的整数");
-  }
-  if (cfg && !Array.isArray(cfg.models)) errors.push("models 必须为数组");
-  if (cfg && Array.isArray(cfg.models)) {
-    cfg.models.forEach((m, i) => {
-      if (!m || typeof m.id !== "string" || !m.id) {
-        errors.push(`models[${i}].id 必须为非空字符串`);
-      }
-    });
-    if (cfg.models.length === 0) errors.push("models 不能为空");
-  }
-  if (errors.length) {
-    throw new Error(`config/trae.json 校验失败：\n- ${errors.join("\n- ")}`);
+  if (isWin) {
+    // Windows：优先 %LOCALAPPDATA%，再补充常见回退位置。
+    const localAppData =
+      process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+    bases.push(path.join(localAppData, "trae-cli", "bin"));
+    if (process.env.APPDATA) {
+      bases.push(path.join(process.env.APPDATA, "trae-cli", "bin"));
+    }
+    bases.push(path.join(home, ".trae-cli", "bin"));
+  } else {
+    // macOS / Linux：常见的用户级与系统级安装位置。
+    bases.push(path.join(home, ".local", "bin"));
+    bases.push(path.join(home, ".trae-cli", "bin"));
+    bases.push("/usr/local/bin");
+    bases.push("/opt/homebrew/bin");
+    bases.push("/usr/bin");
   }
 
-  // 补齐可选字段的默认值。
-  return {
-    port: cfg.port,
-    host: cfg.host || "127.0.0.1",
-    traecliPath: typeof cfg.traecliPath === "string" ? cfg.traecliPath : "",
-    defaultPermissionMode: cfg.defaultPermissionMode || "plan",
-    maxPromptChars: Number.isInteger(cfg.maxPromptChars)
-      ? cfg.maxPromptChars
-      : 30000,
-    models: cfg.models.map((m) => ({ id: m.id, name: m.name || m.id })),
-  };
+  return bases.map((b) => path.join(b, exe));
+}
+
+// 解析 traecli 可执行文件路径：
+// 1) 优先环境变量 TRAECLI_PATH（存在才用）；
+// 2) 其次显式传入的 traecliPath（存在才用）；
+// 3) 否则按平台候选路径自动探测；
+// 4) 都找不到则回退到 PATH 上的命令名，交由系统解析。
+export function resolveTraecli(traecliPath = "") {
+  const envPath = process.env.TRAECLI_PATH;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+  if (traecliPath && fs.existsSync(traecliPath)) return traecliPath;
+  for (const candidate of traecliCandidates()) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return process.platform === "win32" ? "traecli.exe" : "traecli";
 }
 
 // ===== 3.2 定位 opencode 用户配置 =====
@@ -174,7 +168,7 @@ export function readOpencodeConfig(cfgPath) {
   return parseJsonc(raw, cfgPath);
 }
 
-// ===== 3.4 由 trae.json 派生 provider.trae 与转接层 config.json =====
+// ===== 3.4 由配置对象派生 provider.trae 与转接层 config.json =====
 
 export function deriveProvider(traeCfg) {
   const models = {};

@@ -3,7 +3,7 @@
 将企业版 **Trae CLI** 封装为本地 OpenAI 兼容的 HTTP 服务，并作为自定义 provider 接入 [opencode](https://opencode.ai)，让 Trae 模型在 opencode TUI 中像原生模型一样使用。
 
 - 零第三方依赖，仅使用 Node 内置模块。
-- 单一配置源 `config/trae.json` 同时驱动转接层与 opencode provider。
+- 单一配置源 `config/config.mjs`（可执行）同时驱动转接层与 opencode provider；模型列表在安装时实时从 `traecli models` 获取。
 - 提供幂等、带备份、可回滚的安装/卸载/状态脚本。
 
 ## 工作原理
@@ -34,10 +34,11 @@ node scripts/install.mjs
 
 安装脚本会：
 
-1. 复制 `src/server.js` → `~/.config/opencode/trae-bridge/server.js`
-2. 由 `config/trae.json` 生成 `~/.config/opencode/trae-bridge/config.json`
-3. 复制 `src/trae-bridge.js` → `~/.config/opencode/plugins/trae-bridge.js`
-4. **备份**现有 opencode 配置（带时间戳），再把 `provider.trae` 深合并进去
+1. 实时执行 `traecli models` 获取当前可用模型列表（获取失败则中止安装，不写入任何文件）
+2. 复制 `src/server.js` → `~/.config/opencode/trae-bridge/server.js`
+3. 由 `config/config.mjs` 生成 `~/.config/opencode/trae-bridge/config.json`
+4. 复制 `src/trae-bridge.js` → `~/.config/opencode/plugins/trae-bridge.js`
+5. **备份**现有 opencode 配置（带时间戳），再把 `provider.trae` 深合并进去
 
 安装后：**完全退出并重启 opencode** → 运行 `/models` 确认出现 `trae/*` 模型 → 选中即可对话。
 
@@ -61,31 +62,33 @@ node scripts/status.mjs
 
 > 注意：转接层由 opencode 插件在启动时拉起，因此探活成功的前提是 opencode 正在运行。
 
-## 配置：`config/trae.json`
+## 配置：`config/config.mjs`
 
-所有可调项集中在此文件，改后重新运行 `node scripts/install.mjs` 生效。
+所有可调项集中在此可执行配置文件，改后重新运行 `node scripts/install.mjs` 生效。常量项直接定义，模型列表通过逻辑实时获取。
 
-| 字段 | 类型 | 说明 |
+| 导出项 | 类型 | 说明 |
 | --- | --- | --- |
 | `port` | 整数 | 转接层监听端口（默认 `8790`） |
 | `host` | 字符串 | 监听地址（默认 `127.0.0.1`，仅回环） |
-| `traecliPath` | 字符串 | traecli 可执行文件的显式路径。**通常留空**（`""`）即可，转接层会自动探测；仅在非标准安装位置时才需填写 |
+| `traecliPath` | 字符串 | traecli 可执行文件的显式路径。**通常留空**（`""`）即可，会自动探测；仅在非标准安装位置时才需填写 |
 | `defaultPermissionMode` | 字符串 | 权限信号不明确时的默认值：`plan`（只读）或 `bypass_permissions`（可改文件） |
 | `maxPromptChars` | 整数 | prompt 作为命令行参数的字符上限（默认 `30000`） |
-| `models` | 数组 | 暴露给 opencode 的模型，每项 `{ "id": "...", "name": "..." }`；`id` 传给 traecli，`name` 为 opencode 中的显示名 |
+| `resolveModels()` | 函数 | 安装时执行 `traecli models`，实时返回模型列表 `[{ id, name }]`；`id` 传给 traecli，`name` 为 opencode 中的显示名（`"<id> (Trae)"`） |
+
+> 模型列表不再硬编码：每次安装都会实时从 `traecli models` 获取，自动跟随 Trae 平台的模型更新。若 `traecli models` 执行失败（未登录、找不到 traecli 或输出为空），安装会中止并给出清晰错误，此时请先确认 traecli 已安装并已登录。
 
 ### traecli 路径解析
 
-转接层按以下优先级定位 traecli，**无需硬编码任何机器专属的绝对路径**：
+安装脚本与转接层按以下优先级定位 traecli，**无需硬编码任何机器专属的绝对路径**：
 
 1. 环境变量 `TRAECLI_PATH`（若设置且文件存在）
-2. `config/trae.json` 的 `traecliPath`（若非空且文件存在）
+2. `config/config.mjs` 的 `traecliPath`（若非空且文件存在）
 3. 自动探测各平台常见安装位置：
    - Windows：`%LOCALAPPDATA%\trae-cli\bin\`、`%APPDATA%\trae-cli\bin\`、`~\.trae-cli\bin\`
    - macOS / Linux：`~/.local/bin`、`~/.trae-cli/bin`、`/usr/local/bin`、`/opt/homebrew/bin`、`/usr/bin`
 4. 以上都未命中时，回退到 `PATH` 上的 `traecli` 命令，交由系统解析
 
-因此分发给他人时一般无需改动，只要对方已正常安装 traecli 即可。
+因此分发给他人时一般无需改动，只要对方已正常安装并登录 traecli 即可。
 
 ## 已知限制
 

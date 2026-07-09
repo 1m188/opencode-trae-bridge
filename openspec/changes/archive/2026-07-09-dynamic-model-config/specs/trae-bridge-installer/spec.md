@@ -1,4 +1,4 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 可分发的项目结构
 系统 SHALL 将 Trae Bridge 的全部源文件纳入本仓库并按标准化结构组织，使其可通过 `git clone` 分发，且不依赖任何全局配置目录中的手工文件作为源头。
@@ -34,17 +34,6 @@
 - **WHEN** 安装时 `traecli models` 执行失败（未登录、找不到 traecli 或输出为空）
 - **THEN** 安装脚本打印清晰错误并以非零状态码退出，不写入任何配置或部署文件
 
-### Requirement: 转接层读取安装配置
-转接层 SHALL 在启动时优先读取安装目录下的 `config.json`；当该文件缺失或字段缺省时，回退到既有环境变量与内置默认值，且对外的 HTTP 行为保持不变。
-
-#### Scenario: 读取生成的配置
-- **WHEN** 安装目录存在 `config.json` 且指定了端口与模型
-- **THEN** 转接层按该端口监听，并在 `GET /v1/models` 返回该模型列表
-
-#### Scenario: 缺失配置时回退
-- **WHEN** 安装目录不存在 `config.json`
-- **THEN** 转接层使用环境变量或内置默认值启动，不报错
-
 ### Requirement: 标准化安装流程
 系统 SHALL 提供幂等的安装脚本，将转接层、生命周期插件与派生配置部署到 opencode 用户配置目录，并把 `provider.trae` 安全合并进 opencode 配置。
 
@@ -67,25 +56,3 @@
 #### Scenario: 插件以 ESM 加载
 - **WHEN** 安装脚本部署生命周期插件
 - **THEN** 在 `~/.config/opencode/plugins/` 写入最小 `package.json`（`{"type":"module"}`），确保 ESM 插件被正确加载
-
-### Requirement: 标准化卸载流程
-系统 SHALL 提供卸载脚本，精确移除安装产物并从 opencode 配置中撤销相关改动，且改动前先备份。
-
-#### Scenario: 移除运行文件
-- **WHEN** 用户运行 `node scripts/uninstall.mjs`
-- **THEN** `~/.config/opencode/plugins/trae-bridge.js` 与 `~/.config/opencode/trae-bridge/` 目录被删除
-
-#### Scenario: 撤销配置改动
-- **WHEN** 卸载脚本处理 opencode 配置
-- **THEN** 先创建带时间戳的备份，再移除 `provider.trae`（provider 清空后一并删除），其余用户配置保持不变
-
-### Requirement: 安装状态检查
-系统 SHALL 提供状态脚本，报告安装产物是否就位以及转接层是否可用。
-
-#### Scenario: 报告已安装并可用
-- **WHEN** 用户在已安装且转接层运行时执行 `node scripts/status.mjs`
-- **THEN** 输出显示插件文件、转接层文件、派生配置均存在，且 `GET /v1/models` 探活成功并列出模型
-
-#### Scenario: 报告未安装
-- **WHEN** 用户在未安装时执行状态脚本
-- **THEN** 输出明确指出缺失的产物，且脚本不崩溃
