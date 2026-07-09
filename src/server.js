@@ -264,8 +264,54 @@ function killChild(child) {
   }
 }
 
-// 逐行解析 traecli 的 NDJSON 输出，回调 onDelta(增量文本) 与 onResult(最终文本)。
-function parseStream(child, onDelta, onResult, onError, onClose) {
+// 将工具调用参数格式化为简要展示文本，对单值与总值做截断，避免刷屏。
+function formatToolArgs(args) {
+  const entries = Object.entries(args);
+  const maxEntries = 8;
+  const maxLen = 60;
+  const parts = [];
+  let total = 0;
+  for (const [k, v] of entries) {
+    const val = typeof v === "string" ? v : JSON.stringify(v);
+    if (val.length > maxLen) {
+      parts.push(`${k}=${val.slice(0, maxLen)}…`);
+    } else {
+      parts.push(`${k}=${val}`);
+    }
+    total += parts[parts.length - 1].length;
+    if (parts.length >= maxEntries) {
+      parts.push("…");
+      break;
+    }
+    if (total > 200) {
+      parts.pop();
+      parts.push("…");
+      break;
+    }
+  }
+  return parts.join(", ");
+}
+
+// 为单个 tool_call 生成一行可见的状态文本。
+function formatToolCall(tool) {
+  const name = tool.name || tool.function && tool.function.name || "?";
+  let argStr = "";
+  try {
+    const raw = tool.arguments || (tool.function && tool.function.arguments) || {};
+    const args = typeof raw === "string" ? JSON.parse(raw) : raw;
+    argStr = formatToolArgs(args);
+  } catch (_) {
+    const raw = typeof tool.arguments === "string"
+      ? tool.arguments.slice(0, 80)
+      : JSON.stringify(tool.arguments || "").slice(0, 80);
+    argStr = raw;
+  }
+  return `→ 调用 ${name}(${argStr})\n`;
+}
+
+// 逐行解析 traecli 的 NDJSON 输出。
+// 回调：onDelta(正文增量)、onReasoning(思考增量)、onToolCall(工具调用行)、onResult(最终文本)、onError(错误)、onClose(关闭)。
+function parseStream(child, onDelta, onReasoning, onToolCall, onResult, onError, onClose) {
   let buffer = "";
   let finalText = "";
 
@@ -284,10 +330,32 @@ function parseStream(child, onDelta, onResult, onError, onClose) {
         continue; // 非 JSON 行（不应出现在 stdout，稳妥起见跳过）
       }
       if (evt.type === "stream_event") {
-        const piece = evt.delta && evt.delta.content;
-        if (piece) {
-          finalText += piece;
-          onDelta(piece);
+        const delta = evt.delta;
+        if (delta) {
+          if (delta.reasoning_content) {
+            onReasoning(delta.reasoning_content);
+          }
+          if (delta.content) {
+            // 累积正文作为最终答案的兜底（当缺少 result 事件时使用）。
+            // 流式期间不逐字输出：中间叙述与最终答案交错在同一 content 流里，
+            // 为保证「过程→最终答案」的时序，正文改由末尾的 result 一次性输出。
+            finalText += delta.content;
+            onDelta(delta.content);
+          }
+          // delta.tool_calls 是分片式的内部工具调用（非完整），按决策 3 不予转发。
+        }
+      } else if (evt.type === "assistant") {
+        // 聚合后的完整工具调用位于 evt.message.tool_calls；实测既可能是
+        // 单个对象，也可能是数组，这里统一规整为数组处理。
+        const msg = evt.message || evt;
+        const rawCalls = msg.tool_calls;
+        const toolCalls = Array.isArray(rawCalls)
+          ? rawCalls
+          : rawCalls
+          ? [rawCalls]
+          : [];
+        for (const tc of toolCalls) {
+          onToolCall(formatToolCall(tc));
         }
       } else if (evt.type === "result") {
         if (typeof evt.result === "string" && evt.result.length) {
@@ -396,11 +464,16 @@ function handleStreaming(res, model, mode, prompt) {
 
   let finished = false;
   let timer = null;
-  const finish = () => {
+  // 收尾：把最终答案作为唯一正文一次性输出，再发结束分片。
+  // 流式期间思考与工具行已进思考块，正文只在此处输出，确保「过程→最终答案」时序正确。
+  const finish = (finalAnswer) => {
     if (finished) return;
     finished = true;
     if (timer) clearTimeout(timer);
     killChild(child);
+    if (finalAnswer) {
+      send(chunkObject(id, created, model, { content: finalAnswer }, null));
+    }
     send(chunkObject(id, created, model, {}, "stop"));
     res.write("data: [DONE]\n\n");
     res.end();
@@ -432,13 +505,17 @@ function handleStreaming(res, model, mode, prompt) {
 
   parseStream(
     child,
-    (piece) => send(chunkObject(id, created, model, { content: piece }, null)),
-    () => finish(),
+    // 正文增量：流式期间不输出，避免中间叙述与最终答案交错污染正文；
+    // 统一在收尾时以 result 一次性输出。
+    () => {},
+    (reasoningPiece) => send(chunkObject(id, created, model, { reasoning_content: reasoningPiece }, null)),
+    (toolLine) => send(chunkObject(id, created, model, { reasoning_content: toolLine }, null)),
+    (finalAnswer) => finish(finalAnswer),
     (err) => {
       send(chunkObject(id, created, model, { content: `[trae-bridge 错误] ${err.message}` }, null));
       finish();
     },
-    () => finish()
+    (finalAnswer) => finish(finalAnswer)
   );
 }
 
@@ -501,6 +578,8 @@ function handleNonStreaming(res, model, mode, prompt) {
 
   parseStream(
     child,
+    () => {},
+    () => {},
     () => {},
     (text) => settle(text, false),
     (err) => settle(err.message, true),

@@ -3,6 +3,7 @@
 将企业版 **Trae CLI** 封装为本地 OpenAI 兼容的 HTTP 服务，并作为自定义 provider 接入 [opencode](https://opencode.ai)，让 Trae 模型在 opencode TUI 中像原生模型一样使用。
 
 - 零第三方依赖，仅使用 Node 内置模块。
+- 流式响应中 Agent 的思考过程、中间叙述与内部工具调用实时进入 opencode 思考块，最终答案作为正文一次性输出，时序清晰、正文干净。
 - 单一配置源 `config/config.mjs`（可执行）同时驱动转接层与 opencode provider；模型列表在安装时实时从 `traecli models` 获取。
 - 提供幂等、带备份、可回滚的安装/卸载/状态脚本。
 

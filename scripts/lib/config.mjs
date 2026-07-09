@@ -173,7 +173,14 @@ export function readOpencodeConfig(cfgPath) {
 export function deriveProvider(traeCfg) {
   const models = {};
   for (const m of traeCfg.models) {
-    models[m.id] = { name: m.name };
+    // reasoning:true 让 opencode 将 SSE 的 reasoning_content 渲染为思考块（自定义
+    // provider 默认为 false，不设则思考块不显示）；interleaved 指定思考字段名，
+    // 使多轮对话中思考上下文正确保留。二者均为 opencode 模型配置的顶层字段。
+    models[m.id] = {
+      name: m.name,
+      reasoning: true,
+      interleaved: { field: "reasoning_content" },
+    };
   }
   return {
     npm: "@ai-sdk/openai-compatible",
