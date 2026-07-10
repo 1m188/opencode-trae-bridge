@@ -228,10 +228,17 @@ function stripMessages(messages) {
   return messages
     .filter((m) => m && m.role !== "system")
     .map((m) => {
-      let content = contentToText(m && m.content);
+      let content = contentToText(m.content);
+      const before = content;
       content = content
         .replace(/<EXTREMELY_IMPORTANT>[\s\S]*?<\/EXTREMELY_IMPORTANT>/g, "")
         .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+      if (content !== before) {
+        logLine(
+          `已剥离 opencode 注入块 ` +
+            `(role=${m.role}, 缩减 ${before.length - content.length} 字符)`
+        );
+      }
       content = content.trim();
       return { ...m, content };
     })
@@ -240,10 +247,15 @@ function stripMessages(messages) {
 
 // 根据请求内容推导权限模式。
 //
+// 注意：上游 stripMessages() 已将 system 消息和 <system-reminder> 块剥离，
+// opencode 的 plan 信号因此被移除，实际运行中此函数恒回退到 bypass_permissions。
+// 此处保留精确短语匹配作为兜底：若未来调整 strip 策略或 opencode 变更注入方式，
+// 仍能正确识别 plan 信号。
+//
 // opencode 的 plan 模式通过 <system-reminder> 注入一段固定文本，恒以
 // "Plan mode is active. The user indicated that they do not want you to execute
 // yet ..." 开头（已由反编译 opencode 二进制证实）。build 模式是 opencode 的默认
-// 态，不注入任何标记。因此判定规则为：
+// 态，不注入任何标记。判定规则为：
 //   - 命中该 plan 信号 → "plan"（只读）
 //   - 否则 → DEFAULT_PERMISSION_MODE（默认为 "bypass_permissions"，即可写）
 // 只做精确短语匹配，避免旧版宽松子串（如 "read-only"、"plan mode"）在正常对话
@@ -630,6 +642,7 @@ function handleNonStreaming(res, model, mode, prompt) {
   let done = false;
   let timer = null;
   // resetIdleTimer 与 handleStreaming 中的实现相同；修改任一务必同步另一。
+  // prompt 已在 handleChat 入口经 stripMessages 清洗，此处无需重复处理。
   const resetIdleTimer = () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
