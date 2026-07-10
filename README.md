@@ -17,6 +17,7 @@ opencode ──OpenAI 协议──▶ 转接层 server.js ──spawn──▶ t
 
 - opencode 通过 `provider.trae`（`@ai-sdk/openai-compatible`）以 OpenAI 协议访问本地转接层。
 - 转接层将请求转成 `traecli -p --output-format stream-json` 调用，把 NDJSON 输出翻译成 OpenAI 流式（SSE）或非流式响应。
+- 转接层在将 opencode 消息转发给 traecli 前，自动剥离 opencode 附加的提示词内容（系统指令、工具定义、superpowers 引导、plan mode 提醒等），使 traecli 收到的 prompt 与用户直接在终端运行 traecli 时一致。对话历史原样保留。
 - 生命周期插件（`~/.config/opencode/plugins/trae-bridge.js`）负责在 opencode 启动/退出时管理转接层进程；其所有输出写日志文件，不污染 TUI。
 
 ## 前置条件

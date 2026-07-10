@@ -220,6 +220,24 @@ function buildPrompt(messages) {
   return prompt;
 }
 
+// 剥离 opencode 附加的提示词内容，使 traecli 收到的 prompt 与用户直接在终端
+// 运行 traecli 时一致。对话历史（user 正文、assistant 正文与 tool_calls、tool
+// 返回值）原封不动保留。
+function stripMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .filter((m) => m && m.role !== "system")
+    .map((m) => {
+      let content = contentToText(m && m.content);
+      content = content
+        .replace(/<EXTREMELY_IMPORTANT>[\s\S]*?<\/EXTREMELY_IMPORTANT>/g, "")
+        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+      content = content.trim();
+      return { ...m, content };
+    })
+    .filter((m) => m.content && m.content.length > 0);
+}
+
 // 根据请求内容推导权限模式。
 //
 // opencode 的 plan 模式通过 <system-reminder> 注入一段固定文本，恒以
@@ -464,7 +482,7 @@ function handleChat(req, res) {
       }
       model = MODELS[0];
     }
-    const messages = payload.messages || [];
+    const messages = stripMessages(payload.messages || []);
     const stream = payload.stream !== false; // 默认流式
     const prompt = buildPrompt(messages);
     const mode = derivePermissionMode(messages);
