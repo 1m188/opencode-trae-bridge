@@ -369,6 +369,8 @@ function parseStream(child, onReasoning, onToolCall, onContent, onResult, onErro
           }
           if (delta.content) {
             finalText += delta.content;
+            // onContent 仅在 stream_event 分支触发，不包含 result 事件，
+            // 因此无需像 onActivity 那样显式排除 result 类型。
             if (onContent) onContent(delta.content);
           }
           // delta.tool_calls 是分片式的内部工具调用（非完整），按决策 3 不予转发。
@@ -527,6 +529,9 @@ function handleStreaming(res, model, mode, prompt) {
     }, IDLE_TIMEOUT_MS);
   };
   // 收尾：若正文已在流式阶段实时输出，则不再重复发送；否则补发兜底。
+  // streamedContent 仅标记 traecli 的 delta.content 是否已流式输出；
+  // bridge 自身的错误消息（idle timeout 等）由 send() 独立发送后调用
+  // finish() 且不传 finalAnswer，不会触发此处的补发逻辑。
   const finish = (finalAnswer) => {
     if (finished) return;
     finished = true;
