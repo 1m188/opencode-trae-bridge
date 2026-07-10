@@ -337,13 +337,12 @@ function formatToolCall(tool) {
 }
 
 // 逐行解析 traecli 的 NDJSON 输出。
-// 回调：onReasoning(思考增量)、onToolCall(工具调用行)、onResult(最终文本)、onError(错误)、onClose(关闭)。
-// 说明：流式期间 traecli 的中间叙述与最终答案共用同一条 delta.content 流，二者
-// 无可靠分界标志。为保证「过程→最终答案」时序且正文干净，中间叙述一律不输出为
-// 正文；最终答案统一由末尾的 result 事件一次性给出（见 onResult）。delta.content
-// 仅用于累积 finalText 作为"缺少 result 事件"时的兜底。
+// 回调：onReasoning(思考增量)、onToolCall(工具调用行)、onContent(正文增量)、
+// onResult(最终文本)、onError(错误)、onClose(关闭)。
+// 说明：流式期间 delta.content 通过 onContent 实时转发为正文流式输出（含中间叙述噪声）；
+// 末尾 result 事件覆盖 finalText 后通过 onResult 通知调用方，调用方自行判断是否需要补发。
 // 回调 onActivity 在每次成功解析到一条有效 NDJSON 行后调用，供调用方重置空闲超时看门狗。
-function parseStream(child, onReasoning, onToolCall, onResult, onError, onClose, onActivity) {
+function parseStream(child, onReasoning, onToolCall, onContent, onResult, onError, onClose, onActivity) {
   let buffer = "";
   let finalText = "";
 
@@ -369,9 +368,8 @@ function parseStream(child, onReasoning, onToolCall, onResult, onError, onClose,
             onReasoning(delta.reasoning_content);
           }
           if (delta.content) {
-            // 仅累积作为兜底：正常情况下末尾的 result 事件会覆盖 finalText；
-            // 仅当 traecli 未输出 result 时，才用累积的 content 作为最终答案。
             finalText += delta.content;
+            if (onContent) onContent(delta.content);
           }
           // delta.tool_calls 是分片式的内部工具调用（非完整），按决策 3 不予转发。
         }
@@ -509,6 +507,7 @@ function handleStreaming(res, model, mode, prompt) {
 
   let finished = false;
   let timer = null;
+  let streamedContent = false;
   // resetIdleTimer 与 handleNonStreaming 中的实现相同；修改任一务必同步另一。
   const resetIdleTimer = () => {
     if (timer) clearTimeout(timer);
@@ -527,14 +526,13 @@ function handleStreaming(res, model, mode, prompt) {
       finish();
     }, IDLE_TIMEOUT_MS);
   };
-  // 收尾：把最终答案作为唯一正文一次性输出，再发结束分片。
-  // 流式期间思考与工具行已进思考块，正文只在此处输出，确保「过程→最终答案」时序正确。
+  // 收尾：若正文已在流式阶段实时输出，则不再重复发送；否则补发兜底。
   const finish = (finalAnswer) => {
     if (finished) return;
     finished = true;
     if (timer) clearTimeout(timer);
     killChild(child);
-    if (finalAnswer) {
+    if (!streamedContent && finalAnswer) {
       send(chunkObject(id, created, model, { content: finalAnswer }, null));
     }
     send(chunkObject(id, created, model, {}, "stop"));
@@ -557,6 +555,10 @@ function handleStreaming(res, model, mode, prompt) {
     child,
     (reasoningPiece) => send(chunkObject(id, created, model, { reasoning_content: reasoningPiece }, null)),
     (toolLine) => send(chunkObject(id, created, model, { reasoning_content: toolLine }, null)),
+    (contentPiece) => {
+      streamedContent = true;
+      send(chunkObject(id, created, model, { content: contentPiece }, null));
+    },
     (finalAnswer) => finish(finalAnswer),
     (err) => {
       send(chunkObject(id, created, model, { content: `[trae-bridge 错误] ${err.message}` }, null));
@@ -632,6 +634,7 @@ function handleNonStreaming(res, model, mode, prompt) {
 
   parseStream(
     child,
+    () => {},
     () => {},
     () => {},
     (text) => settle(text, false),
