@@ -88,10 +88,12 @@ const DEFAULT_PERMISSION_MODE = CONFIG.defaultPermissionMode;
 // 预留余量给可执行文件路径与其它参数。
 const MAX_PROMPT_CHARS = CONFIG.maxPromptChars;
 
-// 单次 traecli 调用的最长运行时间（毫秒）；超时则杀掉子进程，避免请求永久挂起。
-// 可用环境变量 TRAE_BRIDGE_TIMEOUT_MS 覆盖。
-const REQUEST_TIMEOUT_MS =
-  Number(process.env.TRAE_BRIDGE_TIMEOUT_MS) || 10 * 60 * 1000;
+// 单次 traecli 子进程的空闲超时（毫秒）：若 stdout 在阈值内持续静默（无任何
+// 可解析事件产出），判定 traecli 已卡死，终止子进程并向客户端回报错误。
+// 每次 stdout 产出有效事件时重置计时器，故长任务只要持续有输出就不会被误杀。
+// 可用环境变量 TRAE_BRIDGE_IDLE_TIMEOUT_MS 覆盖。
+const IDLE_TIMEOUT_MS =
+  Number(process.env.TRAE_BRIDGE_IDLE_TIMEOUT_MS) || 10 * 60 * 1000;
 
 // HTTP 请求体大小上限（字节），防止异常/超大请求耗尽内存。
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -340,7 +342,8 @@ function formatToolCall(tool) {
 // 无可靠分界标志。为保证「过程→最终答案」时序且正文干净，中间叙述一律不输出为
 // 正文；最终答案统一由末尾的 result 事件一次性给出（见 onResult）。delta.content
 // 仅用于累积 finalText 作为"缺少 result 事件"时的兜底。
-function parseStream(child, onReasoning, onToolCall, onResult, onError, onClose) {
+// 回调 onActivity 在每次成功解析到一条有效 NDJSON 行后调用，供调用方重置空闲超时看门狗。
+function parseStream(child, onReasoning, onToolCall, onResult, onError, onClose, onActivity) {
   let buffer = "";
   let finalText = "";
 
@@ -358,6 +361,7 @@ function parseStream(child, onReasoning, onToolCall, onResult, onError, onClose)
       } catch (_) {
         continue; // 非 JSON 行（不应出现在 stdout，稳妥起见跳过）
       }
+      if (onActivity && evt.type !== "result") onActivity();
       if (evt.type === "stream_event") {
         const delta = evt.delta;
         if (delta) {
@@ -484,7 +488,10 @@ function handleStreaming(res, model, mode, prompt) {
     Connection: "keep-alive",
   });
 
-  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  const send = (obj) => {
+    if (res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
 
   // 首个分片带上 role。
   send(chunkObject(id, created, model, { role: "assistant" }, null));
@@ -502,6 +509,24 @@ function handleStreaming(res, model, mode, prompt) {
 
   let finished = false;
   let timer = null;
+  // resetIdleTimer 与 handleNonStreaming 中的实现相同；修改任一务必同步另一。
+  const resetIdleTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (finished) return;
+      logLine(`空闲超时（${IDLE_TIMEOUT_MS}ms），终止 traecli 子进程。`);
+      send(
+        chunkObject(
+          id,
+          created,
+          model,
+          { content: `[trae-bridge 错误] 空闲超时（${IDLE_TIMEOUT_MS}ms）` },
+          null
+        )
+      );
+      finish();
+    }, IDLE_TIMEOUT_MS);
+  };
   // 收尾：把最终答案作为唯一正文一次性输出，再发结束分片。
   // 流式期间思考与工具行已进思考块，正文只在此处输出，确保「过程→最终答案」时序正确。
   const finish = (finalAnswer) => {
@@ -525,21 +550,8 @@ function handleStreaming(res, model, mode, prompt) {
     killChild(child);
   });
 
-  // 超时保护：traecli 卡死时终止并向客户端回报错误。
-  timer = setTimeout(() => {
-    if (finished) return;
-    logLine(`请求超时（${REQUEST_TIMEOUT_MS}ms），终止 traecli 子进程。`);
-    send(
-      chunkObject(
-        id,
-        created,
-        model,
-        { content: `[trae-bridge 错误] 请求超时（${REQUEST_TIMEOUT_MS}ms）` },
-        null
-      )
-    );
-    finish();
-  }, REQUEST_TIMEOUT_MS);
+  // spawn 成功后立即启动空闲计时器；此后每次 stdout 有产出时重置。
+  resetIdleTimer();
 
   parseStream(
     child,
@@ -550,7 +562,8 @@ function handleStreaming(res, model, mode, prompt) {
       send(chunkObject(id, created, model, { content: `[trae-bridge 错误] ${err.message}` }, null));
       finish();
     },
-    (finalAnswer) => finish(finalAnswer)
+    (finalAnswer) => finish(finalAnswer),
+    resetIdleTimer
   );
 }
 
@@ -560,6 +573,7 @@ function handleNonStreaming(res, model, mode, prompt) {
   const created = Math.floor(Date.now() / 1000);
 
   const respond = (text, isError) => {
+    if (res.writableEnded) return;
     const body = {
       id,
       object: "chat.completion",
@@ -590,6 +604,14 @@ function handleNonStreaming(res, model, mode, prompt) {
 
   let done = false;
   let timer = null;
+  // resetIdleTimer 与 handleStreaming 中的实现相同；修改任一务必同步另一。
+  const resetIdleTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      logLine(`空闲超时（${IDLE_TIMEOUT_MS}ms），终止 traecli 子进程。`);
+      settle(`空闲超时（${IDLE_TIMEOUT_MS}ms）`, true);
+    }, IDLE_TIMEOUT_MS);
+  };
   const settle = (text, isError) => {
     if (done) return;
     done = true;
@@ -606,10 +628,7 @@ function handleNonStreaming(res, model, mode, prompt) {
     killChild(child);
   });
 
-  timer = setTimeout(() => {
-    logLine(`请求超时（${REQUEST_TIMEOUT_MS}ms），终止 traecli 子进程。`);
-    settle(`请求超时（${REQUEST_TIMEOUT_MS}ms）`, true);
-  }, REQUEST_TIMEOUT_MS);
+  resetIdleTimer();
 
   parseStream(
     child,
@@ -617,7 +636,8 @@ function handleNonStreaming(res, model, mode, prompt) {
     () => {},
     (text) => settle(text, false),
     (err) => settle(err.message, true),
-    (text) => settle(text, false)
+    (text) => settle(text, false),
+    resetIdleTimer
   );
 }
 

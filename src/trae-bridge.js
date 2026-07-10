@@ -16,7 +16,7 @@ const BRIDGE_DIR = path.join(
 const SERVER_PATH = path.join(BRIDGE_DIR, "server.js");
 
 // 插件自身的日志文件；转接层未能启动等诊断信息写此处，绝不写 stdout/stderr，
-// 避免污染 opencode TUI 终端。
+// 避免污染 opencode TUI 终端。插件仅在启动失败时写入，日志量极低，不做轮转。
 const LOG_PATH = path.join(BRIDGE_DIR, "plugin.log");
 
 function logLine(msg) {

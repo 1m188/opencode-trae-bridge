@@ -76,6 +76,16 @@ node scripts/status.mjs
 | `maxPromptChars` | 整数 | prompt 作为命令行参数的字符上限（默认 `30000`） |
 | `resolveModels()` | 函数 | 安装时执行 `traecli models`，实时返回模型列表 `[{ id, name }]`；`id` 传给 traecli，`name` 为 opencode 中的显示名（`"<id> (Trae)"`） |
 
+### 环境变量
+
+转接层支持以下环境变量，优先级高于 `config/config.mjs` 中的对应字段：
+
+| 变量名 | 对应配置 | 说明 | 默认值 |
+| --- | --- | --- | --- |
+| `TRAE_BRIDGE_PORT` | `port` | 覆盖转接层监听端口 | `8790` |
+| `TRAECLI_PATH` | `traecliPath` | 覆盖 traecli 可执行文件路径 | 自动探测 |
+| `TRAE_BRIDGE_IDLE_TIMEOUT_MS` | — | 空闲超时阈值（毫秒）：traecli stdout 连续静默超过该值则判定卡死并终止 | `600000`（10 分钟） |
+
 > 模型列表不再硬编码：每次安装都会实时从 `traecli models` 获取，自动跟随 Trae 平台的模型更新。若 `traecli models` 执行失败（未登录、找不到 traecli 或输出为空），安装会中止并给出清晰错误，此时请先确认 traecli 已安装并已登录。
 
 ### traecli 路径解析
@@ -97,4 +107,4 @@ node scripts/status.mjs
 - **prompt 长度受限**：prompt 通过命令行参数传入，超过 `maxPromptChars` 会截断（保留最近轮次），属有损。
 - **无状态**：每次请求新起一个 traecli 进程，多轮对话靠把历史拼进 prompt，非真正会话复用。
 - **权限模式靠信号推导**：转接层精确匹配 opencode plan 模式注入的 `Plan mode is active` 提示来判定只读；无此信号即视为 build（可改文件）。若未来 opencode 更改该提示措辞，需同步更新匹配逻辑。
-- **孤儿进程**：正常情况下，客户端断开、请求异常或完成时都会终止 traecli 子进程，单次调用还有超时保护（默认 10 分钟，可用 `TRAE_BRIDGE_TIMEOUT_MS` 覆盖）。仅当 opencode 异常崩溃时，转接层进程才可能残留占用端口——下次启动会探活确认占用者是否为自身实例，是则复用退出，否则报错退出。
+- **孤儿进程**：正常情况下，客户端断开、请求异常或完成时都会终止 traecli 子进程；另有空闲超时保护——若 traecli stdout 持续静默超过 10 分钟（默认，可用 `TRAE_BRIDGE_IDLE_TIMEOUT_MS` 覆盖）则判定卡死并终止。仅当 opencode 异常崩溃时，转接层进程才可能残留占用端口——下次启动会探活确认占用者是否为自身实例，是则复用退出，否则报错退出。
