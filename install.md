@@ -16,7 +16,7 @@
 
 ### 1.1 Node.js 已安装
 
-安装过程与 opencode 运行时都需要 Node.js。确认 `node --version` 可正常输出。
+安装过程与 opencode 运行时都需要 Node.js（>= 18）。确认 `node --version` 可正常输出且版本不低于 18。
 
 ### 1.2 traecli 已安装并已登录
 

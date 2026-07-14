@@ -40,11 +40,14 @@ node scripts/install.mjs
 2. 复制 `src/server.js` → `~/.config/opencode/trae-bridge/server.js`
 3. 由 `config/config.mjs` 生成 `~/.config/opencode/trae-bridge/config.json`
 4. 复制 `src/trae-bridge.js` → `~/.config/opencode/plugins/trae-bridge.js`
-5. **备份**现有 opencode 配置（带时间戳），再把 `provider.trae` 深合并进去
+5. 写入 `~/.config/opencode/plugins/package.json`（`{"type":"module"}`），声明插件为 ESM；若已存在且 `type≠module` 则提示人工确认，不覆盖
+6. **备份**现有 opencode 配置（带时间戳），再把 `provider.trae` 深合并进去
 
 安装后：**完全退出并重启 opencode** → 运行 `/models` 确认出现 `trae/*` 模型 → 选中即可对话。
 
 安装**不会**修改你既有的默认模型（不写 `model` 字段），避免劫持你的配置。你可以在 opencode TUI 中用 `/models` 自行选择。
+
+> AI 代理可参考 [`install.md`](./install.md) 在不运行脚本的情况下完成安装。
 
 ## 卸载
 
@@ -52,7 +55,9 @@ node scripts/install.mjs
 node scripts/uninstall.mjs
 ```
 
-会删除插件文件与 `~/.config/opencode/trae-bridge/` 目录，并在**备份后**从 opencode 配置移除 `provider.trae`（若默认模型残留为 `trae/*` 也一并清理）。完成后重启 opencode。
+会删除插件文件与 `~/.config/opencode/trae-bridge/` 目录，条件清理 `~/.config/opencode/plugins/package.json`（仅当其仅含 `{"type":"module"}` 且目录内无其它插件时才删除），并在**备份后**从 opencode 配置移除 `provider.trae`。完成后重启 opencode。
+
+> AI 代理可参考 [`uninstall.md`](./uninstall.md) 在不运行脚本的情况下完成卸载。
 
 ## 状态检查
 
